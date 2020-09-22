@@ -9,6 +9,7 @@ using System.Fabric;
 using System.Fabric.Health;
 using System.IO;
 using System.Net;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -41,12 +42,12 @@ namespace FabricClusterObserver.Utilities.Telemetry
             CancellationToken token,
             string apiVersion = "2016-04-01")
         {
-            this.WorkspaceId = workspaceId;
-            this.Key = sharedKey;
-            this.LogType = logType;
+            WorkspaceId = workspaceId;
+            Key = sharedKey;
+            LogType = logType;
             this.fabricClient = fabricClient;
             this.token = token;
-            this.ApiVersion = apiVersion;
+            ApiVersion = apiVersion;
             logger = new Logger("TelemetryLogger");
         }
 
@@ -74,29 +75,25 @@ namespace FabricClusterObserver.Utilities.Telemetry
                 requestStreamAsync.Write(content, 0, content.Length);
             }
 
-            using (var responseAsync = (HttpWebResponse)request.GetResponse())
+            using var responseAsync = (HttpWebResponse)request.GetResponse();
+            if (responseAsync.StatusCode == HttpStatusCode.OK ||
+                responseAsync.StatusCode == HttpStatusCode.Accepted)
             {
-                if (responseAsync.StatusCode == HttpStatusCode.OK ||
-                    responseAsync.StatusCode == HttpStatusCode.Accepted)
-                {
-                    return Task.CompletedTask;
-                }
-
-                var responseStream = responseAsync.GetResponseStream();
-
-                if (responseStream == null)
-                {
-                    return Task.CompletedTask;
-                }
-
-                using (var streamReader = new StreamReader(responseStream))
-                {
-                    string err = $"Exception sending LogAnalytics Telemetry:{Environment.NewLine}{streamReader.ReadToEnd()}";
-                    logger.LogWarning(err);
-
-                    return Task.FromException(new Exception(err));
-                }
+                return Task.CompletedTask;
             }
+
+            var responseStream = responseAsync.GetResponseStream();
+
+            if (responseStream == null)
+            {
+                return Task.CompletedTask;
+            }
+
+            using var streamReader = new StreamReader(responseStream);
+            string err = $"Exception sending LogAnalytics Telemetry:{Environment.NewLine}{streamReader.ReadToEnd()}";
+            logger.LogWarning(err);
+
+            return Task.FromException(new Exception(err));
         }
 
         private string GetSignature(
@@ -109,10 +106,8 @@ namespace FabricClusterObserver.Utilities.Telemetry
             string message = $"{method}\n{contentLength}\n{contentType}\nx-ms-date:{date}\n{resource}";
             byte[] bytes = Encoding.UTF8.GetBytes(message);
 
-            using (var encryptor = new HMACSHA256(Convert.FromBase64String(Key)))
-            {
-                return $"SharedKey {WorkspaceId}:{Convert.ToBase64String(encryptor.ComputeHash(bytes))}";
-            }
+            using var encryptor = new HMACSHA256(Convert.FromBase64String(Key));
+            return $"SharedKey {WorkspaceId}:{Convert.ToBase64String(encryptor.ComputeHash(bytes))}";
         }
 
         // This is the only function impl that really makes sense for ClusterObserver 
@@ -129,7 +124,7 @@ namespace FabricClusterObserver.Utilities.Telemetry
             string serviceName = null,
             string instanceName = null)
         {
-            var (clusterId, _, _) =
+            var (clusterId, _) =
                 await ClusterIdentificationUtility.TupleGetClusterIdAndTypeAsync(fabricClient, token).ConfigureAwait(true);
 
             string jsonPayload = JsonConvert.SerializeObject(
@@ -144,7 +139,8 @@ namespace FabricClusterObserver.Utilities.Telemetry
                     healthState = state.ToString(),
                     healthEvaluation = unhealthyEvaluations,
                     serviceName = serviceName ?? string.Empty,
-                    instanceName = instanceName ?? string.Empty
+                    instanceName = instanceName ?? string.Empty,
+                    osPlatform = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "Windows" : "Linux",
                 });
 
             await SendTelemetryAsync(jsonPayload).ConfigureAwait(false);

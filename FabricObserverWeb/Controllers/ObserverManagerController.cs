@@ -3,17 +3,18 @@
 // Licensed under the MIT License (MIT). See License.txt in the repo root for license information.
 // ------------------------------------------------------------
 
+using System;
+using System.Fabric;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Mvc;
+
 namespace FabricObserverWeb
 {
-    using System;
-    using System.Fabric;
-    using System.IO;
-    using System.Linq;
-    using System.Net;
-    using System.Text;
-    using System.Threading.Tasks;
-    using Microsoft.AspNetCore.Mvc;
-
     [Route("api/ObserverManager")]
     [Produces("text/html")]
     [ApiController]
@@ -81,14 +82,16 @@ namespace FabricObserverWeb
             {
                 try
                 {
-                    var netFileInfoPath = observerLogFilePath.Replace(@"ObserverManager\ObserverManager.log", "NetInfo.txt");
-                    var sysFileInfoPath = observerLogFilePath.Replace(@"ObserverManager\ObserverManager.log", "SysInfo.txt");
-                    var evtVwrErrorLogPath = observerLogFilePath.Replace(@"ObserverManager\ObserverManager.log", "EventVwrErrors.txt");
-                    var diskFileInfoPath = observerLogFilePath.Replace(@"ObserverManager\ObserverManager.log", "disks.txt");
-                    var sfInfraInfoPath = observerLogFilePath.Replace(@"ObserverManager\ObserverManager.log", "SFInfraInfo.txt");
+                    string fragment = Path.Combine("ObserverManager", "ObserverManager.log");
+
+                    var netFileInfoPath = observerLogFilePath.Replace(fragment, "NetInfo.txt");
+                    var sysFileInfoPath = observerLogFilePath.Replace(fragment, "SysInfo.txt");
+                    var evtVwrErrorLogPath = observerLogFilePath.Replace(fragment, "EventVwrErrors.txt");
+                    var diskFileInfoPath = observerLogFilePath.Replace(fragment, "disks.txt");
+                    var sfInfraInfoPath = observerLogFilePath.Replace(fragment, "SFInfraInfo.txt");
 
                     // These are the app-specific
-                    var currentDataHealthLogPathPart = observerLogFilePath.Replace(@"ObserverManager\ObserverManager.log", "apps");
+                    var currentDataHealthLogPathPart = observerLogFilePath.Replace(fragment, "apps");
                     string sysInfofileText = string.Empty, evtVwrErrorsText = string.Empty, log = string.Empty, diskInfoTxt = string.Empty, appHealthText = string.Empty, sfInfraText = string.Empty, netInfofileText = string.Empty;
 
                     // Only show info from current day, by default. This is just for web UI (html).
@@ -142,16 +145,16 @@ namespace FabricObserverWeb
 
                     var nodeList = this.fabricClient.QueryManager.GetNodeListAsync().Result;
                     var ordered = nodeList.OrderBy(node => node.NodeName);
-                    var host = this.Request.Host.Value;
+                    var host = Request.Host.Value;
 
                     // Request originating from ObserverWeb node hyperlinks.
-                    if (this.Request.QueryString.HasValue && this.Request.Query.ContainsKey("fqdn"))
+                    if (Request.QueryString.HasValue && Request.Query.ContainsKey("fqdn"))
                     {
-                        host = this.Request.Query["fqdn"];
+                        host = Request.Query["fqdn"];
 
                         foreach (var node in ordered)
                         {
-                            nodeLinks += "| <a href='" + this.Request.Scheme + "://" + host + "/api/ObserverManager/" + node.NodeName + "'>" + node.NodeName + "</a> | ";
+                            nodeLinks += "| <a href='" + Request.Scheme + "://" + host + "/api/ObserverManager/" + node.NodeName + "'>" + node.NodeName + "</a> | ";
                         }
                     }
 
@@ -231,7 +234,7 @@ namespace FabricObserverWeb
                         addr = "http://" + addr;
                     }
 
-                    string fqdn = "?fqdn=" + this.Request.Host;
+                    string fqdn = "?fqdn=" + Request.Host;
                     var req = WebRequest.Create(addr + ":5000/api/ObserverManager" + fqdn);
                     req.Credentials = CredentialCache.DefaultCredentials;
                     var response = (HttpWebResponse)req.GetResponse();

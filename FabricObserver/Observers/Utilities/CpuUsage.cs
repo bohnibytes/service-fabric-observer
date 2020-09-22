@@ -9,7 +9,7 @@ using System.Diagnostics;
 namespace FabricObserver.Observers.Utilities
 {
     // .NET Standard Process-based impl (cross-platform)
-    internal class CpuUsage
+    public class CpuUsage
     {
         private DateTime prevTime = DateTime.MinValue;
         private DateTime currentTimeTime = DateTime.MinValue;
@@ -36,6 +36,7 @@ namespace FabricObserver.Observers.Utilities
                 var cpuUsage = currentUsage / Environment.ProcessorCount;
                 this.prevTime = this.currentTimeTime;
                 this.prevTotalProcessorTime = this.currentTotalProcessorTime;
+
                 return (int)(cpuUsage * 100);
             }
 

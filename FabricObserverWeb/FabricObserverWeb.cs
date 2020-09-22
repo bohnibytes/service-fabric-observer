@@ -3,19 +3,19 @@
 // Licensed under the MIT License (MIT). See License.txt in the repo root for license information.
 // ------------------------------------------------------------
 
+using System;
+using System.Collections.Generic;
+using System.Fabric;
+using System.IO;
+using System.Net;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.ServiceFabric.Services.Communication.AspNetCore;
+using Microsoft.ServiceFabric.Services.Communication.Runtime;
+using Microsoft.ServiceFabric.Services.Runtime;
+
 namespace FabricObserverWeb
 {
-    using System;
-    using System.Collections.Generic;
-    using System.Fabric;
-    using System.IO;
-    using System.Net;
-    using Microsoft.AspNetCore.Hosting;
-    using Microsoft.Extensions.DependencyInjection;
-    using Microsoft.ServiceFabric.Services.Communication.AspNetCore;
-    using Microsoft.ServiceFabric.Services.Communication.Runtime;
-    using Microsoft.ServiceFabric.Services.Runtime;
-
     /// <summary>
     /// The FabricRuntime creates an instance of this class for each service type instance.
     /// </summary>
@@ -34,11 +34,10 @@ namespace FabricObserverWeb
             this.fabricClient = new FabricClient();
         }
 
-        /// <inheritdoc/>
         public void Dispose()
         {
             // Do not change this code. Put cleanup code in Dispose(bool disposing) above.
-            this.Dispose(true);
+            Dispose(true);
         }
 
         /// <summary>
@@ -58,10 +57,7 @@ namespace FabricObserverWeb
                                     .UseKestrel(opt =>
                                     {
                                         int port = serviceContext.CodePackageActivationContext.GetEndpoint("ServiceEndpoint").Port;
-                                        opt.Listen(IPAddress.Loopback, port, listenOptions =>
-                                        {
-                                            listenOptions.NoDelay = true;
-                                        });
+                                        opt.Listen(IPAddress.Loopback, port);
                                     })
                                     .ConfigureServices(services => services.AddSingleton(serviceContext))
                                     .ConfigureServices(services => services.AddSingleton(this.fabricClient))

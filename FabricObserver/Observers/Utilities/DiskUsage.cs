@@ -5,149 +5,140 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 
 namespace FabricObserver.Observers.Utilities
 {
-    internal class DiskUsage : IDisposable
+    public static class DiskUsage
     {
-        private WindowsPerfCounters winPerfCounters;
-        private bool isDisposed;
+        private static PerformanceCounter diskAverageQueueLengthCounter =
+            new PerformanceCounter(categoryName: "LogicalDisk", counterName: "Avg. Disk Queue Length", readOnly: true);
 
-        /// <summary>
-        /// Initializes a new instance of the <see cref="DiskUsage"/> class.
-        /// </summary>
-        public DiskUsage()
+        public static bool ShouldCheckDrive(DriveInfo driveInfo)
         {
-            var driveLetter = Environment.CurrentDirectory.Substring(0, 2);
-            this.Drive = driveLetter;
-            this.winPerfCounters = new WindowsPerfCounters();
+            if (!driveInfo.IsReady)
+            {
+                return false;
+            }
+
+            // Skip not interesting Linux mount points.
+            if (driveInfo.TotalSize == 0 ||
+                string.Equals(driveInfo.DriveFormat, "squashfs", StringComparison.Ordinal) ||
+                string.Equals(driveInfo.DriveFormat, "tmpfs", StringComparison.Ordinal) ||
+                string.Equals(driveInfo.DriveFormat, "overlay", StringComparison.Ordinal) ||
+                string.Equals(driveInfo.RootDirectory.FullName, "/boot/efi", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            // CDRom and Network drives do not have Avg queue length perf counter
+            if (driveInfo.DriveType == DriveType.CDRom || driveInfo.DriveType == DriveType.Network)
+            {
+                return false;
+            }
+
+            return true;
         }
 
-        /// <summary>
-        /// Initializes a new instance of the <see cref="DiskUsage"/> class.
-        /// </summary>
-        /// <param name="driveLetter">Drive letter.</param>
-        public DiskUsage(string driveLetter)
+        public static double GetTotalDiskSpace(string driveName, SizeUnit sizeUnit = SizeUnit.Bytes)
         {
-            this.Drive = driveLetter;
-            this.winPerfCounters = new WindowsPerfCounters();
+            return GetTotalDiskSpace(new DriveInfo(driveName), sizeUnit);
         }
 
-        /// <summary>
-        /// Gets the percent used space (as an integer value) of the current drive where this code is running from.
-        /// Or from whatever drive letter you supplied to DiskUsage(string driveLetter) ctor.
-        /// </summary>
-        internal int PercentUsedSpace => GetCurrentDiskSpaceUsedPercent(this.Drive);
-
-        internal string Drive { get; }
-
-        /// <inheritdoc/>
-        public void Dispose()
+        public static double GetTotalDiskSpace(DriveInfo driveInfo, SizeUnit sizeUnit = SizeUnit.Bytes)
         {
-            this.Dispose(true);
-        }
-
-        internal static double GetTotalDiskSpace(string driveLetter, SizeUnit sizeUnit = SizeUnit.Bytes)
-        {
-            var driveInfo = new DriveInfo(driveLetter);
             long total = driveInfo.TotalSize;
-
             return Math.Round(ConvertToSizeUnits(total, sizeUnit), 2);
         }
 
-        internal static int GetCurrentDiskSpaceUsedPercent(string drive)
+        public static int GetCurrentDiskSpaceUsedPercent(string driveName)
         {
-            if (string.IsNullOrEmpty(drive))
-            {
-                return -1; // Don't throw here.
-            }
+            return GetCurrentDiskSpaceUsedPercent(new DriveInfo(driveName));
+        }
 
-            var driveInfo = new DriveInfo(drive);
-            long availableMb = driveInfo.AvailableFreeSpace / 1024 / 1024;
-            long totalMb = driveInfo.TotalSize / 1024 / 1024;
-            double usedPct = ((double)(totalMb - availableMb)) / totalMb;
+        public static int GetCurrentDiskSpaceUsedPercent(DriveInfo driveInfo)
+        {
+            long availableMB = driveInfo.AvailableFreeSpace / 1024 / 1024;
+            long totalMB = driveInfo.TotalSize / 1024 / 1024;
+            double usedPct = ((double)(totalMB - availableMB)) / totalMB;
 
             return (int)(usedPct * 100);
         }
 
-        internal List<(string DriveName, double DiskSize, int PercentConsumed)>
+        public static List<(string DriveName, double DiskSize, int PercentConsumed)>
             GetCurrentDiskSpaceTotalAndUsedPercentAllDrives(SizeUnit sizeUnit = SizeUnit.Bytes)
         {
             DriveInfo[] allDrives = DriveInfo.GetDrives();
 
             return (
-                from t in allDrives
-                where t.IsReady
-                select t.Name into driveName
-                let totalSize = GetTotalDiskSpace(driveName, sizeUnit)
-                let pctUsed = GetCurrentDiskSpaceUsedPercent(driveName)
-                select (driveName.Substring(0, 1), totalSize, pctUsed)).ToList();
+                from drive in allDrives
+                where ShouldCheckDrive(drive)
+                let totalSize = GetTotalDiskSpace(drive, sizeUnit)
+                let pctUsed = GetCurrentDiskSpaceUsedPercent(drive)
+                select (drive.Name, totalSize, pctUsed)).ToList();
         }
 
-        internal double GetAvailableDiskSpace(string driveLetter, SizeUnit sizeUnit = SizeUnit.Bytes)
+        public static double GetAvailableDiskSpace(string driveName, SizeUnit sizeUnit = SizeUnit.Bytes)
         {
-            var driveInfo = new DriveInfo(driveLetter);
+            var driveInfo = new DriveInfo(driveName);
             long available = driveInfo.AvailableFreeSpace;
 
             return Math.Round(ConvertToSizeUnits(available, sizeUnit), 2);
         }
 
-        internal double GetUsedDiskSpace(string driveLetter, SizeUnit sizeUnit = SizeUnit.Bytes)
+        public static double GetUsedDiskSpace(string driveName, SizeUnit sizeUnit = SizeUnit.Bytes)
         {
-            var driveInfo = new DriveInfo(driveLetter);
+            var driveInfo = new DriveInfo(driveName);
             long used = driveInfo.TotalSize - driveInfo.AvailableFreeSpace;
 
             return Math.Round(ConvertToSizeUnits(used, sizeUnit), 2);
         }
 
-        internal float GetAverageDiskQueueLength(string instance)
+        public static float GetAverageDiskQueueLength(string instance)
         {
-            return this.winPerfCounters.PerfCounterGetAverageDiskQueueLength(instance);
-        }
-
-        protected virtual void Dispose(bool disposing)
-        {
-            if (this.isDisposed)
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
-                return;
-            }
-
-            if (disposing)
-            {
-                if (this.winPerfCounters != null)
+                try
                 {
-                    this.winPerfCounters.Dispose();
-                    this.winPerfCounters = null;
+                    DiskUsage.diskAverageQueueLengthCounter.InstanceName = instance;
+                    return DiskUsage.diskAverageQueueLengthCounter.NextValue();
+                }
+                catch (Exception e)
+                {
+                    Logger logger = new Logger("Utilities");
+
+                    if (e is ArgumentNullException || e is PlatformNotSupportedException
+                        || e is System.ComponentModel.Win32Exception || e is UnauthorizedAccessException)
+                    {
+                        logger.LogError($"{DiskUsage.diskAverageQueueLengthCounter.CategoryName} {DiskUsage.diskAverageQueueLengthCounter.CounterName} PerfCounter handled exception: " + e);
+
+                        // Don't throw.
+                        return 0F;
+                    }
+
+                    logger.LogError($"{DiskUsage.diskAverageQueueLengthCounter.CategoryName} {DiskUsage.diskAverageQueueLengthCounter.CounterName} PerfCounter unhandled exception: " + e);
+                    throw;
                 }
             }
 
-            this.isDisposed = true;
+            // We do not support this on Linux for now
+            return 0F;
         }
 
         private static double ConvertToSizeUnits(double amount, SizeUnit sizeUnit)
         {
-            switch (sizeUnit)
+            return sizeUnit switch
             {
-                case SizeUnit.Bytes:
-                    return amount;
-
-                case SizeUnit.Kilobytes:
-                    return amount / 1024;
-
-                case SizeUnit.Megabytes:
-                    return amount / 1024 / 1024;
-
-                case SizeUnit.Gigabytes:
-                    return amount / 1024 / 1024 / 1024;
-
-                case SizeUnit.Terabytes:
-                    return amount / 1024 / 1024 / 1024 / 1024;
-
-                default:
-                    return amount;
-            }
+                SizeUnit.Bytes => amount,
+                SizeUnit.Kilobytes => amount / 1024,
+                SizeUnit.Megabytes => amount / 1024 / 1024,
+                SizeUnit.Gigabytes => amount / 1024 / 1024 / 1024,
+                SizeUnit.Terabytes => amount / 1024 / 1024 / 1024 / 1024,
+                _ => amount,
+            };
         }
     }
 

@@ -6,6 +6,7 @@
 using System;
 using System.Diagnostics.Tracing;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading;
 using FabricObserver.Observers.Interfaces;
 using NLog;
@@ -29,20 +30,18 @@ namespace FabricObserver.Observers.Utilities
             get; private set;
         }
 
-        /// <inheritdoc/>
         public bool EnableVerboseLogging { get; set; } = false;
 
-        /// <inheritdoc/>
         public string LogFolderBasePath { get; set; }
 
         public string FilePath { get; set; }
 
-        internal string FolderName
+        public string FolderName
         {
             get;
         }
 
-        internal string Filename
+        public string Filename
         {
             get;
         }
@@ -67,16 +66,16 @@ namespace FabricObserver.Observers.Utilities
         /// <param name="logFolderBasePath">Base folder path.</param>
         public Logger(string observerName, string logFolderBasePath = null)
         {
-            this.FolderName = observerName;
-            this.Filename = observerName + ".log";
+            FolderName = observerName;
+            Filename = observerName + ".log";
             this.loggerName = observerName;
 
             if (!string.IsNullOrEmpty(logFolderBasePath))
             {
-                this.LogFolderBasePath = logFolderBasePath;
+                LogFolderBasePath = logFolderBasePath;
             }
 
-            this.InitializeLoggers();
+            InitializeLoggers();
         }
 
         public static void ShutDown()
@@ -89,36 +88,32 @@ namespace FabricObserver.Observers.Utilities
             LogManager.Flush();
         }
 
-        /// <inheritdoc/>
-        public void LogTrace(string observer, string format, params object[] parameters)
+        
+        public void LogTrace(string format, params object[] parameters)
         {
-            this.OLogger.Trace(observer + "|" + format, parameters);
+            OLogger.Trace(format, parameters);
         }
 
-        /// <inheritdoc/>
         public void LogInfo(string format, params object[] parameters)
         {
-            if (!this.EnableVerboseLogging)
+            if (!EnableVerboseLogging)
             {
                 return;
             }
 
-            this.OLogger.Info(format, parameters);
+            OLogger.Info(format, parameters);
         }
 
-        /// <inheritdoc/>
         public void LogError(string format, params object[] parameters)
         {
-            this.OLogger.Error(format, parameters);
+            OLogger.Error(format, parameters);
         }
 
-        /// <inheritdoc/>
         public void LogWarning(string format, params object[] parameters)
         {
-            this.OLogger.Warn(format, parameters);
+            OLogger.Warn(format, parameters);
         }
 
-        /// <inheritdoc/>
         public bool TryWriteLogFile(string path, string content)
         {
             if (string.IsNullOrEmpty(content))
@@ -158,7 +153,7 @@ namespace FabricObserver.Observers.Utilities
 
         public bool TryDeleteInstanceLog()
         {
-            if (string.IsNullOrEmpty(this.FilePath) || !File.Exists(this.FilePath))
+            if (string.IsNullOrEmpty(FilePath) || !File.Exists(FilePath))
             {
                 return false;
             }
@@ -167,7 +162,7 @@ namespace FabricObserver.Observers.Utilities
             {
                 try
                 {
-                    File.Delete(this.FilePath);
+                    File.Delete(FilePath);
                     return true;
                 }
                 catch (IOException)
@@ -183,27 +178,56 @@ namespace FabricObserver.Observers.Utilities
             return false;
         }
 
-        internal void InitializeLoggers()
+        public void InitializeLoggers()
         {
             // default log directory.
-            string windrive = Environment.SystemDirectory.Substring(0, 2);
-            string logFolderBase = windrive + "\\observer_logs";
+            string logFolderBase = string.Empty;
 
-            // log directory supplied in config. Set in ObserverManager.
-            if (!string.IsNullOrEmpty(this.LogFolderBasePath))
+            // Log directory supplied in Settings.xml.
+            if (!string.IsNullOrEmpty(LogFolderBasePath))
             {
-                logFolderBase = this.LogFolderBasePath;
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    // Add current drive letter if not supplied for Windows path target.
+                    if (!LogFolderBasePath.Substring(0, 3).Contains(":\\"))
+                    {
+                        string windrive = Environment.SystemDirectory.Substring(0, 3);
+                        logFolderBase = windrive + LogFolderBasePath;
+                    }
+                }
+                else
+                {
+                    // Remove supplied drive letter if Linux is the runtime target.
+                    if (LogFolderBasePath.Substring(0, 3).Contains(":\\"))
+                    {
+                        LogFolderBasePath = LogFolderBasePath.Remove(0, 3).Replace("\\", "/");
+                    }
+
+                    logFolderBase = LogFolderBasePath;
+                }
+            }
+            else
+            {
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    string windrive = Environment.SystemDirectory.Substring(0, 3);
+                    logFolderBase = windrive + "observer_logs";
+                }
+                else
+                {
+                    logFolderBase = "/tmp/observer_logs";
+                }
             }
 
             string file = Path.Combine(logFolderBase, "fabric_observer.log");
 
-            if (!string.IsNullOrEmpty(this.FolderName) && !string.IsNullOrEmpty(this.Filename))
+            if (!string.IsNullOrEmpty(FolderName) && !string.IsNullOrEmpty(Filename))
             {
-                string folderPath = Path.Combine(logFolderBase, this.FolderName);
-                file = Path.Combine(folderPath, this.Filename);
+                string folderPath = Path.Combine(logFolderBase, FolderName);
+                file = Path.Combine(folderPath, Filename);
             }
 
-            this.FilePath = file;
+            FilePath = file;
 
             var targetName = this.loggerName + "LogFile";
 
@@ -217,6 +241,8 @@ namespace FabricObserver.Observers.Utilities
                 var target = new FileTarget
                 {
                     Name = targetName,
+                    OptimizeBufferReuse = true,
+                    ConcurrentWrites = true,
                     FileName = file,
                     Layout = "${longdate}--${uppercase:${level}}--${message}",
                     OpenFileCacheTimeout = 5,
@@ -234,7 +260,7 @@ namespace FabricObserver.Observers.Utilities
             }
 
             TimeSource.Current = new AccurateUtcTimeSource();
-            this.OLogger = LogManager.GetLogger(this.loggerName);
+            OLogger = LogManager.GetLogger(this.loggerName);
         }
     }
 }

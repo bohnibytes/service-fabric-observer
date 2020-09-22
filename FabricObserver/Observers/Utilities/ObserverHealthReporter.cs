@@ -8,8 +8,6 @@ using System.Fabric;
 using System.Fabric.Health;
 using FabricObserver.Observers.Utilities.Telemetry;
 using Newtonsoft.Json;
-using Newtonsoft.Json.Converters;
-using Newtonsoft.Json.Serialization;
 
 namespace FabricObserver.Observers.Utilities
 {
@@ -81,48 +79,7 @@ namespace FabricObserver.Observers.Utilities
                 timeToLive = healthReport.HealthReportTimeToLive;
             }
 
-            // Set property for health event.
-            string property = healthReport.Property;
-
-            if (string.IsNullOrEmpty(property))
-            {
-                switch (healthReport.Observer)
-                {
-                    case ObserverConstants.AppObserverName:
-                        property = "ApplicationHealth";
-                        break;
-                    case ObserverConstants.CertificateObserverName:
-                        property = "SecurityHealth";
-                        break;
-                    case ObserverConstants.DiskObserverName:
-                        property = "DiskHealth";
-                        break;
-                    case ObserverConstants.FabricSystemObserverName:
-                        property = "FabricSystemServiceHealth";
-                        break;
-                    case ObserverConstants.NetworkObserverName:
-                        property = "NetworkHealth";
-                        break;
-                    case ObserverConstants.OsObserverName:
-                        property = "MachineInformation";
-                        break;
-                    case ObserverConstants.NodeObserverName:
-                        property = "MachineResourceHealth";
-                        break;
-                    default:
-                        property = "FOGenericHealth";
-                        break;
-                }
-            }
-
-            string sourceId = healthReport.Observer;
             TelemetryData healthData = healthReport.HealthData;
-
-            if (!string.IsNullOrEmpty(healthReport.Code))
-            {
-                // Only use FOErrorWarningCode for source
-                sourceId += $"({healthReport.Code})";
-            }
 
             string errWarnPreamble = string.Empty;
 
@@ -134,11 +91,10 @@ namespace FabricObserver.Observers.Utilities
                     $"{Enum.GetName(typeof(HealthState), healthReport.State)} threshold breach. ";
 
                 // OSObserver does not monitor resources and therefore does not support related usage threshold configuration.
-                if (healthReport.Observer == ObserverConstants.OsObserverName
-                    && property == "OSConfiguration")
+                if (healthReport.Observer == ObserverConstants.OSObserverName
+                    && healthReport.Property == "OSConfiguration")
                 {
-                    errWarnPreamble = $"{ObserverConstants.OsObserverName} detected potential problem with OS configuration: ";
-                    property = "OSConfiguration";
+                    errWarnPreamble = $"{ObserverConstants.OSObserverName} detected potential problem with OS configuration: ";
                 }
             }
 
@@ -149,7 +105,27 @@ namespace FabricObserver.Observers.Utilities
                 message = JsonConvert.SerializeObject(healthData);
             }
 
-            var healthInformation = new HealthInformation(sourceId, property, healthReport.State)
+            if (string.IsNullOrEmpty(healthReport.SourceId))
+            {
+                healthReport.SourceId = healthReport.Observer;
+            }
+
+            if (string.IsNullOrEmpty(healthReport.Property))
+            {
+                healthReport.Property = healthReport.Observer switch
+                {
+                    ObserverConstants.AppObserverName => "ApplicationHealth",
+                    ObserverConstants.CertificateObserverName => "SecurityHealth",
+                    ObserverConstants.DiskObserverName => "DiskHealth",
+                    ObserverConstants.FabricSystemObserverName => "FabricSystemServiceHealth",
+                    ObserverConstants.NetworkObserverName => "NetworkHealth",
+                    ObserverConstants.OSObserverName => "MachineInformation",
+                    ObserverConstants.NodeObserverName => "MachineResourceHealth",
+                    _ => $"{healthReport.Observer}_HealthProperty",
+                };
+            }
+
+            var healthInformation = new HealthInformation(healthReport.SourceId, healthReport.Property, healthReport.State)
             {
                 Description = $"{message}",
                 TimeToLive = timeToLive,
@@ -185,6 +161,7 @@ namespace FabricObserver.Observers.Utilities
                 var nodeHealthReport = new NodeHealthReport(healthReport.NodeName, healthInformation);
                 this.fabricClient.HealthManager.ReportHealth(nodeHealthReport, sendOptions);
             }
+
         }
     }
 

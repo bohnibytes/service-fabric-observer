@@ -7,6 +7,7 @@ using System;
 using System.Collections.Generic;
 using System.Fabric;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -23,26 +24,26 @@ namespace FabricClusterObserver.Observers
 
         protected FabricClient FabricClientInstance { get; set; }
 
-        /// <inheritdoc/>
+        
         public string ObserverName { get; set; }
 
-        /// <inheritdoc/>
+        
         public string NodeName { get; set; }
 
         public string NodeType { get; private set; }
 
-        /// <inheritdoc/>
+        
         public StatelessServiceContext FabricServiceContext { get; }
 
-        /// <inheritdoc/>
+        
         public DateTime LastRunDateTime { get; set; }
 
         public CancellationToken Token { get; set; }
 
-        /// <inheritdoc/>
+        
         public bool IsEnabled { get; set; } = true;
 
-        /// <inheritdoc/>
+        
         public bool IsUnhealthy { get; set; } = false;
 
         // Only set for unit test runs.
@@ -50,26 +51,26 @@ namespace FabricClusterObserver.Observers
 
         // Loggers.
 
-        /// <inheritdoc/>
+        
         public Logger ObserverLogger { get; set; }
 
         // Each derived Observer can set this to maintain health status across iterations.
         // This information is used by ObserverManager.
 
-        /// <inheritdoc/>
+        
         public bool HasActiveFabricErrorOrWarning { get; set; } = false;
 
-        /// <inheritdoc/>
+        
         public TimeSpan RunInterval { get; set; } = TimeSpan.MinValue;
 
         public TimeSpan AsyncClusterOperationTimeoutSeconds { get; set; } = TimeSpan.FromSeconds(60);
 
         public List<string> Settings { get; }
 
-        /// <inheritdoc/>
+        
         public abstract Task ObserveAsync(CancellationToken token);
 
-        /// <inheritdoc/>
+        
         public abstract Task ReportAsync(CancellationToken token);
 
         /// <summary>
@@ -77,23 +78,23 @@ namespace FabricClusterObserver.Observers
         /// </summary>
         protected ObserverBase(string observerName)
         {
-            this.FabricClientInstance = ObserverManager.FabricClientInstance;
+            FabricClientInstance = ObserverManager.FabricClientInstance;
 
-            if (this.IsTelemetryEnabled)
+            if (IsTelemetryEnabled)
             {
-                this.ObserverTelemetryClient = ObserverManager.TelemetryClient;
+                ObserverTelemetryClient = ObserverManager.TelemetryClient;
             }
 
-            this.Settings = new List<string>();
-            this.ObserverName = observerName;
-            this.FabricServiceContext = ObserverManager.FabricServiceContext;
-            this.NodeName = this.FabricServiceContext.NodeContext.NodeName;
-            this.NodeType = this.FabricServiceContext.NodeContext.NodeType;
-            this.AsyncClusterOperationTimeoutSeconds = TimeSpan.FromSeconds(ObserverManager.AsyncClusterOperationTimeoutSeconds);
+            Settings = new List<string>();
+            ObserverName = observerName;
+            FabricServiceContext = ObserverManager.FabricServiceContext;
+            NodeName = FabricServiceContext.NodeContext.NodeName;
+            NodeType = FabricServiceContext.NodeContext.NodeType;
+            AsyncClusterOperationTimeoutSeconds = TimeSpan.FromSeconds(ObserverManager.AsyncClusterOperationTimeoutSeconds);
             
             // Observer Logger setup.
             string logFolderBasePath;
-            string observerLogPath = this.GetSettingParameterValue(
+            string observerLogPath = GetSettingParameterValue(
                 ObserverConstants.ObserverManagerConfigurationSectionName,
                 ObserverConstants.ObserverLogPath);
 
@@ -103,58 +104,58 @@ namespace FabricClusterObserver.Observers
             }
             else
             {
-                string logFolderBase = $@"{Environment.CurrentDirectory}\observer_logs";
+                string logFolderBase = Path.Combine(Environment.CurrentDirectory, "observer_logs");
                 logFolderBasePath = logFolderBase;
             }
 
-            this.ObserverLogger = new Logger(observerName, logFolderBasePath);
+            ObserverLogger = new Logger(observerName, logFolderBasePath);
 
             // Observer enabled?
             if (bool.TryParse(
-                this.GetSettingParameterValue(
+                GetSettingParameterValue(
                 observerName + "Configuration",
                 ObserverConstants.ObserverEnabled),
                 out bool enabled))
             {
-                this.IsEnabled = enabled;
+                IsEnabled = enabled;
             }
 
             // Verbose logging?
             if (bool.TryParse(
-                this.GetSettingParameterValue(
+                GetSettingParameterValue(
                 observerName + "Configuration",
                 ObserverConstants.EnableVerboseLoggingParameter),
                 out bool enableVerboseLogging))
             {
-                this.ObserverLogger.EnableVerboseLogging = enableVerboseLogging;
+                ObserverLogger.EnableVerboseLogging = enableVerboseLogging;
             }
 
             // RunInterval?
             if (TimeSpan.TryParse(
-                this.GetSettingParameterValue(
+                GetSettingParameterValue(
                 observerName + "Configuration",
                 ObserverConstants.ObserverRunIntervalParameterName),
                 out TimeSpan runInterval))
             {
-                this.RunInterval = runInterval;
+                RunInterval = runInterval;
             }
         }
 
-        /// <inheritdoc/>
+        
         public void WriteToLogWithLevel(string property, string description, LogLevel level)
         {
             switch (level)
             {
                 case LogLevel.Information:
-                    this.ObserverLogger.LogInfo("{0} logged at level {1}: {2}", property, level, description);
+                    ObserverLogger.LogInfo("{0} logged at level {1}: {2}", property, level, description);
                     break;
 
                 case LogLevel.Warning:
-                    this.ObserverLogger.LogWarning("{0} logged at level {1}: {2}", property, level, description);
+                    ObserverLogger.LogWarning("{0} logged at level {1}: {2}", property, level, description);
                     break;
 
                 case LogLevel.Error:
-                    this.ObserverLogger.LogError("{0} logged at level {1}: {2}", property, level, description);
+                    ObserverLogger.LogError("{0} logged at level {1}: {2}", property, level, description);
                     break;
             }
 
@@ -178,7 +179,7 @@ namespace FabricClusterObserver.Observers
 
             try
             {
-                var serviceConfiguration = this.FabricServiceContext.CodePackageActivationContext.GetConfigurationPackageObject("Config");
+                var serviceConfiguration = FabricServiceContext.CodePackageActivationContext.GetConfigurationPackageObject("Config");
                 
                 if (serviceConfiguration == null)
                 {
@@ -241,7 +242,7 @@ namespace FabricClusterObserver.Observers
 
             IDictionary<string, string> container = new Dictionary<string, string>();
 
-            var serviceConfiguration = this.FabricServiceContext.CodePackageActivationContext.GetConfigurationPackageObject("Config");
+            var serviceConfiguration = FabricServiceContext.CodePackageActivationContext.GetConfigurationPackageObject("Config");
 
             var sections = serviceConfiguration.Settings.Sections.FirstOrDefault(sec => sec.Name == sectionName);
 
@@ -277,7 +278,7 @@ namespace FabricClusterObserver.Observers
             try
             {
                 interval = TimeSpan.Parse(
-                    this.GetSettingParameterValue(
+                    GetSettingParameterValue(
                                           configSectionName,
                                           configParamName),
                     CultureInfo.InvariantCulture);
@@ -316,10 +317,10 @@ namespace FabricClusterObserver.Observers
             {
                 if (disposing)
                 {
-                    if (this.FabricClientInstance != null)
+                    if (FabricClientInstance != null)
                     {
-                        this.FabricClientInstance.Dispose();
-                        this.FabricClientInstance = null;
+                        FabricClientInstance.Dispose();
+                        FabricClientInstance = null;
                     }
                 }
 
@@ -327,11 +328,11 @@ namespace FabricClusterObserver.Observers
             }
         }
 
-        /// <inheritdoc/>
+        
         public void Dispose()
         {
             // Do not change this code. Put cleanup code in Dispose(bool disposing) above.
-            this.Dispose(true);
+            Dispose(true);
         }
     }
 }

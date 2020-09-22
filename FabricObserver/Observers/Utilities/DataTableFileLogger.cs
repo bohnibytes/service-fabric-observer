@@ -5,8 +5,8 @@
 
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 using FabricObserver.Interfaces;
-using FabricObserver.Observers.Interfaces;
 using NLog;
 using NLog.Targets;
 using NLog.Time;
@@ -16,25 +16,49 @@ namespace FabricObserver.Observers.Utilities
     // CSV file logger for long-running monitoring data (memory/cpu/disk/network usage data).
     public class DataTableFileLogger : IDataTableFileLogger<ILogger>
     {
-        /// <inheritdoc/>
         public bool EnableCsvLogging { get; set; } = false;
 
-        /// <inheritdoc/>
         public string DataLogFolderPath { get; set; } = null;
 
         private static ILogger Logger { get; set; }
 
-        /// <inheritdoc/>
         public void ConfigureLogger(string filename)
         {
             // default log directory.
-            string windrive = Environment.SystemDirectory.Substring(0, 2);
-            string logPath = windrive + "\\observer_logs\\fabric_observer_data";
+            string logPath;
+
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                string windrive = Environment.SystemDirectory.Substring(0, 3);
+                logPath = windrive + "\\fabric_observer_csvdata";
+            }
+            else
+            {
+                logPath = "/tmp/fabric_observer_csvdata";
+            }
 
             // log directory supplied in config. Set in ObserverManager.
-            if (!string.IsNullOrEmpty(this.DataLogFolderPath))
+            if (!string.IsNullOrEmpty(DataLogFolderPath))
             {
-                logPath = this.DataLogFolderPath;
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    // Add current drive letter if not supplied for Windows path target.
+                    if (!DataLogFolderPath.Substring(0, 3).Contains(":\\"))
+                    {
+                        string windrive = Environment.SystemDirectory.Substring(0, 3);
+                        logPath = windrive + DataLogFolderPath;
+                    }
+                }
+                else
+                {
+                    // Remove supplied drive letter if Linux is the runtime target.
+                    if (DataLogFolderPath.Substring(0, 3).Contains(":\\"))
+                    {
+                        DataLogFolderPath = DataLogFolderPath.Remove(0, 3);
+                    }
+
+                    logPath = DataLogFolderPath;
+                }
             }
 
             var csvPath = Path.Combine(logPath, filename + ".csv");
@@ -66,7 +90,6 @@ namespace FabricObserver.Observers.Utilities
             <column name="value" layout="${event-properties:value}" />
         */
 
-        /// <inheritdoc/>
         public void LogData(
             string fileName,
             string target,
@@ -76,7 +99,7 @@ namespace FabricObserver.Observers.Utilities
         {
             // If you provided an IObserverTelemetry impl, then this will, for example,
             // send traces up to App Insights (Azure). See the App.config for settings example.
-            if (!this.EnableCsvLogging)
+            if (!EnableCsvLogging)
             {
                 if (!ObserverManager.TelemetryEnabled)
                 {
@@ -94,7 +117,7 @@ namespace FabricObserver.Observers.Utilities
             }
 
             // Else, reconfigure logger to write to file on disk.
-            this.ConfigureLogger(fileName);
+            ConfigureLogger(fileName);
 
             Logger.Info(
                 "{target}{metric}{stat}{value}",
@@ -104,12 +127,12 @@ namespace FabricObserver.Observers.Utilities
                 value);
         }
 
-        internal static void ShutDown()
+        public static void ShutDown()
         {
             LogManager.Shutdown();
         }
 
-        internal static void Flush()
+        public static void Flush()
         {
             LogManager.Flush();
         }

@@ -1,8 +1,10 @@
-# FabricObserver
+# FabricObserver 3.0.4
 
-[**FabricObserver (FO)**](https://github.com/microsoft/service-fabric-observer/releases) is a complete implementation of a generic resource usage watchdog service written as a stateless, singleton Service Fabric application that 
+[**FabricObserver (FO)**](https://github.com/microsoft/service-fabric-observer/releases) is a complete implementation of a generic resource usage watchdog service written as a stateless, singleton Service Fabric .NET Core 3.1 application that 
 1. Monitors a broad range of resources that tend to be important to all Service Fabric applications, like disk, CPU, memory, networking, and cluster certificates out-of-the-box.
-2. Provides a simple model in which new observers can be built and configured and run automatically through a .NET development model.
+2. Runs on multiple versions of Windows Server and Ubuntu 16.04 and 18.04
+3. Provides [an easy-to-use extensibility model](/Documentation/Plugins.md) for creating [custom Observers](/SampleObserverPlugin) out of band (so, you don't need to clone the repo to build an Observer).
+4. Supports [Configuration Setting Application Updates](/Documentation/Using.md#parameterUpdates) for any observer for any supported setting. 
 
 FO is a Stateless Service Fabric Application composed of a single service that runs on every node in your cluster, so it can be deployed and run alongside your applications without any changes to them. Each FO service instance knows nothing about other FO instances in the cluster, by design.  
 
@@ -50,14 +52,22 @@ For more information about **the design of FabricObserver**, please see the [Des
 
 ## Build and run  
 
-## Note that the current version of code can target either 6.4, 6.5, or 7.0+ SF runtimes and their respective SDK versions. The current Nuget packages.config, however, targets 7.0+, so downgrade your SF nuget packages versions to whatever version of SF is running in your cluster if it's not 7.0+. The latest Release SFPKG is meant for 7.0 clusters.
-
 1. Clone the repo.
-2. If you want to use the optional [FabricObserver API Service](/FabricObserverWeb) and you are using VS 2019, you must install [.NET Core 2.2 SDK](https://dotnet.microsoft.com/download/dotnet-core/2.2). If you are using VS 2017, then install [.NET Core 2.1 SDK](https://dotnet.microsoft.com/download/dotnet-core/2.1), as VS2017 does not support 2.2.
-2. Build (the required Nuget packages will be downloaded and installed automatically by Visual Studio). 
+2. Install [.NET Core 3.1](https://dotnet.microsoft.com/download/dotnet-core/3.1)
+3. Build. 
+
+Note: There is no need to run FO as system on Windows or root on Linux. 
+
+For Linux deployments, we have ensured that FO will work as expected as normal user. In order for us to do this, we had to implement a setup script that sets [Capabilities](https://man7.org/linux/man-pages/man7/capabilities.7.html) on a proxy binary which can run netstat -tnap elevated. 
+If you deploy from VS, then you will need to use FabricObserver/PackageRoot/ServiceManifest.linux.xml (just copy its contents into ServiceManifest.xml or add the new piece which is simply a SetupEntryPoint section). You 
+will also need to do the same with ApplicationManifest.xml (see FabricObserverApp/ApplicationPackageRoot/ApplicationManifest.linux.xml for required changes). If you use our build scripts, they will take care of these modifications automatically for linux build output.
+Just run Build-FabricObserver.ps1
+
+You can also run the build scripts from a Powershell console. These include code build, sfpkg generation, and nupkg generation. They are all located in the top level directory of this repo.
 
 FabricObserver can be run and deployed through Visual Studio or Powershell, like any SF app. If you want to add this to your Azure Pipelines CI, 
-see [FOAzurePipeline.yaml](/FOAzurePipeline.yaml) for msazure devops build tasks.  
+see [FOAzurePipeline.yaml](/FOAzurePipeline.yaml) for msazure devops build tasks. <strong>Please keep in mind that if your target servers do not already have
+.NET Core 3.1 installed (if you deploy VM images from Azure gallery, then they will not have .NET Core 3.1 installed), then you must deploy the SelfContained package.</strong>
 
 If you deploy via ARM, then simply add a path to the FO SFPKG you generate (create pkg folder (in VS, right-click FabricObserverApp project, select Package), zip it, rename the file to whatever you want, replace .zip with .sfpkg file extension...) from your build after updating
 the configs to make sense for your applications/services/nodes (store the sfpkg in some blob store you trust): 
