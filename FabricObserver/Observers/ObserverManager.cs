@@ -27,7 +27,7 @@ namespace FabricObserver.Observers
     public class ObserverManager : IDisposable
     {
         private static bool etwEnabled;
-        private readonly string nodeName;
+        public readonly string nodeName;
         private readonly TelemetryEvents telemetryEvents;
         private List<ObserverBase> observers;
         private EventWaitHandle globalShutdownEventHandle;
@@ -75,7 +75,7 @@ namespace FabricObserver.Observers
             FabricServiceContext = serviceProvider.GetRequiredService<StatelessServiceContext>();
             this.nodeName = FabricServiceContext?.NodeContext.NodeName;
             FabricServiceContext.CodePackageActivationContext.ConfigurationPackageModifiedEvent += CodePackageActivationContext_ConfigurationPackageModifiedEvent;
-            
+
             // Observer Logger setup.
             string logFolderBasePath;
             string observerLogPath = GetConfigSettingValue(
@@ -96,7 +96,7 @@ namespace FabricObserver.Observers
             this.HealthReporter = new ObserverHealthReporter(this.Logger);
             this.SetPropertieSFromConfigurationParameters();
             this.serviceCollection = serviceProvider.GetServices<ObserverBase>();
-            
+
             // Populate the Observer list for the sequential run loop.
             this.observers = this.serviceCollection.Where(o => o.IsEnabled).ToList();
 
@@ -114,7 +114,8 @@ namespace FabricObserver.Observers
 
             string codePkgVersion = FabricServiceContext.CodePackageActivationContext.CodePackageVersion;
             string serviceManifestVersion = FabricServiceContext.CodePackageActivationContext.GetConfigurationPackageObject("Config").Description.ServiceManifestVersion;
-            string filepath = Path.Combine(logFolderBasePath, $"fo_telemetry_sent_{codePkgVersion.Replace(".", string.Empty)}_{serviceManifestVersion.Replace(".", string.Empty)}_{FabricServiceContext.NodeContext.NodeType}.txt");
+            string filepath = Path.Combine(this.Logger.LogFolderBasePath, $"fo_telemetry_sent_{codePkgVersion.Replace(".", string.Empty)}_{serviceManifestVersion.Replace(".", string.Empty)}_{FabricServiceContext.NodeContext.NodeType}.log");
+
 #if !DEBUG
             // If this has already been sent for this activated version (code/config) of nodetype x
             if (File.Exists(filepath))
@@ -128,14 +129,15 @@ namespace FabricObserver.Observers
                 ServiceEventSource.Current,
                 this.token);
 
+            string foInternalTelemetryData = this.GetFabricObserverInternalConfiguration();
             if (this.telemetryEvents.FabricObserverRuntimeNodeEvent(
                 codePkgVersion,
-                this.GetFabricObserverInternalConfiguration(),
+                foInternalTelemetryData,
                 "HealthState.Initialized"))
             {
                 // Log a file to prevent re-sending this in case of process restart(s).
                 // This non-PII FO/Cluster info is versioned and should only be sent once per deployment (config or code updates.).
-                this.Logger.TryWriteLogFile(filepath, "_");
+                _ = this.Logger.TryWriteLogFile(filepath, foInternalTelemetryData);
             }
         }
 
@@ -238,6 +240,8 @@ namespace FabricObserver.Observers
                     {
                         _ = this.globalShutdownEventHandle.Set();
                         this.Logger.LogWarning("Shutdown signaled. Stopping.");
+                        await ShutDownAsync().ConfigureAwait(false);
+
                         break;
                     }
 
@@ -292,21 +296,96 @@ namespace FabricObserver.Observers
                 // Take down FO process. Fix the bugs in OM that this identifies.
                 throw;
             }
-
-            this.ShutDown();
         }
 
-        public void StopObservers(bool shutdownSignaled = true)
+        public async Task StopObserversAsync(bool shutdownSignaled = true)
         {
             try
             {
+                foreach (var obs in this.observers)
+                {
+                    // If the node goes down, for example, or the app is gracefully closed,
+                    // then clear all existing error or health reports suppled by FO.
+                    // NetworkObserver takes care of this internally, so ignore here.
+                    if (obs.HasActiveFabricErrorOrWarning &&
+                        obs.ObserverName != ObserverConstants.NetworkObserverName)
+                    {
+                        Utilities.HealthReport healthReport = new Utilities.HealthReport
+                        {
+                            Code = FOErrorWarningCodes.Ok,
+                            HealthMessage = $"Clearing existing Health Error/Warning as FO is stopping or updating.",
+                            State = HealthState.Ok,
+                            ReportType = HealthReportType.Application,
+                            NodeName = obs.NodeName,
+                        };
+
+                        if (obs.AppNames.Count > 0 && obs.AppNames.All(a => !string.IsNullOrEmpty(a) && a.Contains("fabric:/")))
+                        {
+                            foreach (var app in obs.AppNames)
+                            {
+                                var appHealth = await FabricClientInstance.HealthManager.GetApplicationHealthAsync(
+                                                        new Uri(app),
+                                                        TimeSpan.FromSeconds(90),
+                                                        token).ConfigureAwait(false);
+                                int? unhealthyEventsCount = appHealth.HealthEvents?.Count(
+                                    s => s.HealthInformation.SourceId.Contains(obs.ObserverName));
+
+                                if (unhealthyEventsCount == null || unhealthyEventsCount == 0)
+                                {
+                                    continue;
+                                }
+
+                                foreach (var evt in appHealth.HealthEvents.Where(
+                                    s => s.HealthInformation.SourceId.Contains(obs.ObserverName)))
+                                {
+                                    healthReport.AppName = new Uri(app);
+                                    healthReport.Property = evt.HealthInformation.Property;
+                                    healthReport.SourceId = evt.HealthInformation.SourceId;
+
+                                    var healthReporter = new ObserverHealthReporter(this.Logger);
+                                    healthReporter.ReportHealthToServiceFabric(healthReport);
+
+                                    await Task.Delay(1500, token).ConfigureAwait(false);
+                                }
+                            }
+                        }
+                        else
+                        {
+                            var nodeHealth = await FabricClientInstance.HealthManager.GetNodeHealthAsync(
+                                                    obs.NodeName,
+                                                    TimeSpan.FromSeconds(90),
+                                                    token).ConfigureAwait(false);
+                            int? unhealthyEventsCount = nodeHealth.HealthEvents?.Count(
+                                     s => s.HealthInformation.SourceId.Contains(obs.ObserverName));
+
+                            if (unhealthyEventsCount != null && unhealthyEventsCount > 0)
+                            {
+                                foreach (var evt in nodeHealth.HealthEvents.Where(
+                                    s => s.HealthInformation.SourceId.Contains(obs.ObserverName)))
+                                {
+                                    healthReport.Property = evt.HealthInformation.Property;
+                                    healthReport.SourceId = evt.HealthInformation.SourceId;
+
+                                    var healthReporter = new ObserverHealthReporter(this.Logger);
+                                    healthReporter.ReportHealthToServiceFabric(healthReport);
+
+                                    await Task.Delay(1500, token).ConfigureAwait(false);
+                                }
+                            }
+                        }
+                    }
+                }
+
                 this.shutdownSignaled = shutdownSignaled;
                 this.SignalAbortToRunningObserver();
                 this.IsObserverRunning = false;
             }
+            catch (Exception e) when (e is FabricException || e is TimeoutException)
+            {
+            }
             catch (Exception e)
             {
-                this.Logger.LogWarning($"Unhandled Exception thrown during ObserverManager.Stop(): {e}");
+                this.Logger.LogWarning($"Unhandled Exception thrown during ObserverManager.StopObservers():{Environment.NewLine}{e}");
 
                 throw;
             }
@@ -369,48 +448,9 @@ namespace FabricObserver.Observers
             return null;
         }
 
-        private void ShutDown()
+        private async Task ShutDownAsync()
         {
-            if (this.IsObserverRunning)
-            {
-                this.StopObservers();
-            }
-
-            _ = this.globalShutdownEventHandle?.Set();
-
-            if (this.observers?.Count > 0)
-            {
-                foreach (ObserverBase obs in this.observers)
-                {
-                    // If the node goes down, for example, or the app is gracefully closed,
-                    // then clear all existing error or health reports suppled by FO.
-                    // NetworkObserver takes care of this internally, so ignore here.
-                    if (obs.HasActiveFabricErrorOrWarning && 
-                        obs.ObserverName != ObserverConstants.NetworkObserverName)
-                    {
-                        for (int i = 0; i < obs.HealthReportSourceIds.Count; i++)
-                        {
-                            var healthReport = new Utilities.HealthReport
-                            {
-                                AppName = !string.IsNullOrEmpty(obs.AppNames[i]) ? new Uri(obs.AppNames[i]) : null,
-                                Code = FOErrorWarningCodes.Ok,
-                                HealthMessage = $"Clearing existing Health Error/Warning, {obs.HealthReportProperties[i]}/{obs.HealthReportSourceIds[i]}, as FO is stopping.",
-                                Property = obs.HealthReportProperties[i],
-                                SourceId = obs.HealthReportSourceIds[i],
-                                State = HealthState.Ok,
-                                NodeName = obs.NodeName,
-                            };
-
-                            var healthReporter = new ObserverHealthReporter(this.Logger);
-                            healthReporter.ReportHealthToServiceFabric(healthReport);
-                        }
-                    }
-
-                    obs?.Dispose();
-                }
-
-                this.observers.Clear();
-            }
+            await this.StopObserversAsync().ConfigureAwait(false);
 
             if (this.cts != null)
             {
@@ -485,12 +525,12 @@ namespace FabricObserver.Observers
         private async void CodePackageActivationContext_ConfigurationPackageModifiedEvent(object sender, PackageModifiedEventArgs<ConfigurationPackage> e)
         {
             this.isConfigurationUpdateInProgess = true;
-            this.StopObservers(false);
+            await StopObserversAsync(false).ConfigureAwait(false);
 
             await Task.Delay(
                 TimeSpan.FromSeconds(1),
                 this.linkedSFRuntimeObserverTokenSource != null ? this.linkedSFRuntimeObserverTokenSource.Token : this.token).ConfigureAwait(false);
-            
+
             try
             {
                 foreach (var observer in this.serviceCollection)
@@ -657,12 +697,12 @@ namespace FabricObserver.Observers
         private void SignalAbortToRunningObserver()
         {
             this.Logger.LogInfo("Signalling task cancellation to currently running Observer.");
-            
+
             if (this.linkedSFRuntimeObserverTokenSource != null)
             {
                 this.linkedSFRuntimeObserverTokenSource.Cancel();
             }
-            else 
+            else
             {
                 this.cts?.Cancel();
             }
@@ -685,7 +725,7 @@ namespace FabricObserver.Observers
                 {
                     // Shutdown/cancellation signaled, so stop.
                     bool taskCancelled = this.linkedSFRuntimeObserverTokenSource != null ? this.linkedSFRuntimeObserverTokenSource.Token.IsCancellationRequested : this.token.IsCancellationRequested;
-                    
+
                     if (taskCancelled || this.shutdownSignaled)
                     {
                         return false;

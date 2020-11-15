@@ -85,23 +85,50 @@ namespace FabricObserver.Observers
             }
         }
 
-        public int CpuErrorUsageThresholdPct { get; set; }
+        public int CpuErrorUsageThresholdPct
+        {
+            get; set;
+        }
 
-        public int MemErrorUsageThresholdMb { get; set; }
+        public int MemErrorUsageThresholdMb
+        {
+            get; set;
+        }
 
-        public int TotalActivePortCount { get; set; }
+        public int TotalActivePortCount
+        {
+            get; set;
+        }
 
-        public int TotalActiveEphemeralPortCount { get; set; }
+        public int TotalActiveEphemeralPortCount
+        {
+            get; set;
+        }
 
-        public int PortCountWarning { get; set; }
+        public int PortCountWarning
+        {
+            get; set;
+        }
 
-        public int PortCountError { get; set; }
+        public int PortCountError
+        {
+            get; set;
+        }
 
-        public int CpuWarnUsageThresholdPct { get; set; }
+        public int CpuWarnUsageThresholdPct
+        {
+            get; set;
+        }
 
-        public int MemWarnUsageThresholdMb { get; set; }
+        public int MemWarnUsageThresholdMb
+        {
+            get; set;
+        }
 
-        public string ErrorOrWarningKind { get; set; } = null;
+        public string ErrorOrWarningKind 
+        { 
+            get; set; 
+        } = null;
 
         public override async Task ObserveAsync(CancellationToken token)
         {
@@ -605,7 +632,7 @@ namespace FabricObserver.Observers
 
                     // Warm up the counters.
                     CpuUsage cpuUsage = new CpuUsage();
-                    _ = cpuUsage.GetCpuUsageProcess(process);
+                    _ = cpuUsage.GetCpuUsagePercentageProcess(process);
                     _ = ProcessInfoProvider.Instance.GetProcessPrivateWorkingSetInMB(process.Id);
 
                     timer.Start();
@@ -617,7 +644,7 @@ namespace FabricObserver.Observers
                         try
                         {
                             // CPU Time for service process.
-                            int cpu = (int)cpuUsage.GetCpuUsageProcess(process);
+                            int cpu = (int)cpuUsage.GetCpuUsagePercentageProcess(process);
                             this.allCpuData.FirstOrDefault(x => x.Id == dotnetArg).Data.Add(cpu);
 
                             // Private Working Set for service process.
@@ -668,7 +695,7 @@ namespace FabricObserver.Observers
             {
                 Token.ThrowIfCancellationRequested();
 
-                if (dataItem.Data.Count == 0 || Convert.ToDouble(dataItem.AverageDataValue) < 0)
+                if (dataItem.Data.Count == 0 || dataItem.AverageDataValue < 0)
                 {
                     continue;
                 }
@@ -692,7 +719,7 @@ namespace FabricObserver.Observers
                             break;
                     }
 
-                    CsvFileLogger.LogData(fileName, dataItem.Id, dataLogMonitorType, "Average", Math.Round(Convert.ToDouble(dataItem.AverageDataValue), 2));
+                    CsvFileLogger.LogData(fileName, dataItem.Id, dataLogMonitorType, "Average", Math.Round(dataItem.AverageDataValue, 2));
                     CsvFileLogger.LogData(fileName, dataItem.Id, dataLogMonitorType, "Peak", Math.Round(Convert.ToDouble(dataItem.MaxDataValue)));
                 }
 

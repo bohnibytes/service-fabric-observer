@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Fabric;
-using System.Fabric.Health;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -52,7 +51,7 @@ namespace FabricObserverTests
 
         private readonly StatelessServiceContext context
                 = new StatelessServiceContext(
-                    new NodeContext("_Node_0", new NodeId(0, 1), 0, "NodeType1", "TEST.MACHINE"),
+                    new NodeContext("_Node_0", new NodeId(0, 1), 0, "NodeType0", "TEST.MACHINE"),
                     CodePackageContext,
                     "FabricObserver.FabricObserverType",
                     ServiceName,
@@ -427,7 +426,7 @@ namespace FabricObserverTests
         // Stop observer tests. Ensure calling ObserverManager's StopObservers() works as expected.
         [TestMethod]
         [SuppressMessage("Code Quality", "IDE0067:Dispose objects before losing scope", Justification = "Noise.")]
-        public void Successful_CertificateObserver_Run_Cancellation_Via_ObserverManager()
+        public async Task Successful_CertificateObserver_Run_Cancellation_Via_ObserverManager()
         {
             ObserverManager.FabricServiceContext = this.context;
             ObserverManager.TelemetryEnabled = false;
@@ -456,6 +455,7 @@ namespace FabricObserverTests
                 ClusterCertThumbprintOrCommonName = string.Empty,
                 ClusterCertSecondaryThumbprint = string.Empty,
             };
+            obs.HasActiveFabricErrorOrWarning = true;
 
             var obsMgr = new ObserverManager(obs)
             {
@@ -469,10 +469,11 @@ namespace FabricObserverTests
 
             Wait(() => obsMgr.IsObserverRunning, 10);
             Assert.IsTrue(obsMgr.IsObserverRunning);
-            obsMgr.StopObservers();
+            await obsMgr.StopObserversAsync().ConfigureAwait(false);
             Assert.IsFalse(obsMgr.IsObserverRunning);
 
             obs.Dispose();
+            obsMgr.Dispose();
         }
 
         [TestMethod]
@@ -510,10 +511,11 @@ namespace FabricObserverTests
 
             Wait(() => obsMgr.IsObserverRunning, 10);
             Assert.IsTrue(obsMgr.IsObserverRunning);
-            obsMgr.StopObservers();
+            obsMgr.StopObserversAsync();
             Assert.IsFalse(obsMgr.IsObserverRunning);
 
             obs.Dispose();
+            obsMgr.Dispose();
         }
 
         [TestMethod]
@@ -542,7 +544,7 @@ namespace FabricObserverTests
 
             Wait(() => obsMgr.IsObserverRunning, 10);
             Assert.IsTrue(obsMgr.IsObserverRunning);
-            obsMgr.StopObservers();
+            obsMgr.StopObserversAsync();
             Assert.IsFalse(obsMgr.IsObserverRunning);
 
             obs.Dispose();
@@ -574,7 +576,7 @@ namespace FabricObserverTests
 
             Wait(() => obsMgr.IsObserverRunning, 10);
             Assert.IsTrue(obsMgr.IsObserverRunning);
-            obsMgr.StopObservers();
+            obsMgr.StopObserversAsync();
             Assert.IsFalse(obsMgr.IsObserverRunning);
 
             obs.Dispose();
@@ -606,7 +608,7 @@ namespace FabricObserverTests
 
             Wait(() => obsMgr.IsObserverRunning, 10);
             Assert.IsTrue(obsMgr.IsObserverRunning);
-            obsMgr.StopObservers();
+            obsMgr.StopObserversAsync();
             Assert.IsFalse(obsMgr.IsObserverRunning);
             obs.Dispose();
         }
@@ -637,7 +639,7 @@ namespace FabricObserverTests
 
             Wait(() => obsMgr.IsObserverRunning, 10);
             Assert.IsTrue(obsMgr.IsObserverRunning);
-            obsMgr.StopObservers();
+            obsMgr.StopObserversAsync();
             Assert.IsFalse(obsMgr.IsObserverRunning);
 
             obs.Dispose();
@@ -669,7 +671,7 @@ namespace FabricObserverTests
 
             Wait(() => obsMgr.IsObserverRunning, 10);
             Assert.IsTrue(obsMgr.IsObserverRunning);
-            obsMgr.StopObservers();
+            obsMgr.StopObserversAsync();
             Assert.IsFalse(obsMgr.IsObserverRunning);
 
             obs.Dispose();
@@ -783,6 +785,7 @@ namespace FabricObserverTests
             finally
             {
                 UnInstallCerts();
+
                 obs?.Dispose();
                 ObserverManager.FabricClientInstance?.Dispose();
             }
@@ -802,9 +805,11 @@ namespace FabricObserverTests
             ObserverManager.TelemetryEnabled = false;
             ObserverManager.EtwEnabled = false;
 
-            var obs = new CertificateObserver
-            {
+            var obs = new CertificateObserver();
 
+            var obsMgr = new ObserverManager(obs)
+            {
+                ApplicationName = "fabric:/TestApp0",
             };
 
             var commonNamesToObserve = new List<string>
@@ -838,9 +843,12 @@ namespace FabricObserverTests
 
             // observer did not have any internal errors during run.
             Assert.IsFalse(obs.IsUnhealthy);
+            await obsMgr.StopObserversAsync();
 
+            // Required blocking for health warning clear.
+            await Task.Delay(1000).ConfigureAwait(false);
             obs.Dispose();
-            ObserverManager.FabricClientInstance.Dispose();
+            obsMgr.Dispose();
         }
 
         /// <summary>
@@ -1049,6 +1057,11 @@ namespace FabricObserverTests
                 MonitorDuration = TimeSpan.FromSeconds(5),
             };
 
+            var obsMgr = new ObserverManager(obs)
+            {
+                ApplicationName = "fabric:/TestApp0",
+            };
+
             await obs.ObserveAsync(this.token).ConfigureAwait(true);
 
             // observer ran to completion with no errors.
@@ -1070,30 +1083,10 @@ namespace FabricObserverTests
             // Output file is not empty.
             Assert.IsTrue(File.ReadAllLines(outputFilePath).Length > 0);
 
-            // If the node goes down, for example, or the app is gracefully closed,
-            // then clear all existing error or health reports suppled by this observer instance.
-            for (int i = 0; i < obs.HealthReportSourceIds.Count; i++)
-            {
-                var healthReport = new FabricObserver.Observers.Utilities.HealthReport
-                {
-                    Code = FOErrorWarningCodes.Ok,
-                    HealthMessage = $"Clearing existing Health Error/Warning, {obs.HealthReportProperties[i]}/{obs.HealthReportSourceIds[i]}, as FO is stopping.",
-                    Property = obs.HealthReportProperties[i],
-                    SourceId = obs.HealthReportSourceIds[i],
-                    State = HealthState.Ok,
-                    ReportType = HealthReportType.Node,
-                    NodeName = obs.NodeName,
-                };
-
-                var healthReporter = new ObserverHealthReporter(obs.ObserverLogger);
-                healthReporter.ReportHealthToServiceFabric(healthReport);
-
-                // This delay is required.
-                await Task.Delay(1000).ConfigureAwait(false);
-            }
-
+            await obsMgr.StopObserversAsync().ConfigureAwait(false);
+            await Task.Delay(1000).ConfigureAwait(false);
             obs.Dispose();
-            ObserverManager.FabricClientInstance.Dispose();
+            obsMgr.Dispose();
         }
 
         /// <summary>
@@ -1215,6 +1208,11 @@ namespace FabricObserverTests
                 MemWarningUsageThresholdMb = 1, // This will generate Warning for sure.
             };
 
+            var obsMgr = new ObserverManager(obs)
+            {
+                
+            };
+
             await obs.ObserveAsync(this.token).ConfigureAwait(true);
 
             // observer ran to completion with no errors.
@@ -1227,31 +1225,10 @@ namespace FabricObserverTests
 
             // observer did not have any internal errors during run.
             Assert.IsFalse(obs.IsUnhealthy);
-
-            // If the node goes down, for example, or the app is gracefully closed,
-            // then clear all existing error or health reports suppled by this observer instance.
-            for (int i = 0; i < obs.HealthReportSourceIds.Count; i++)
-            {
-                var healthReport = new FabricObserver.Observers.Utilities.HealthReport
-                {
-                    Code = FOErrorWarningCodes.Ok,
-                    HealthMessage = $"Clearing existing Health Error/Warning, {obs.HealthReportProperties[i]}/{obs.HealthReportSourceIds[i]}, as FO is stopping.",
-                    Property = obs.HealthReportProperties[i],
-                    SourceId = obs.HealthReportSourceIds[i],
-                    State = HealthState.Ok,
-                    ReportType = HealthReportType.Node,
-                    NodeName = obs.NodeName,
-                };
-
-                var healthReporter = new ObserverHealthReporter(obs.ObserverLogger);
-                healthReporter.ReportHealthToServiceFabric(healthReport);
-
-                // This delay is required.
-                await Task.Delay(1000).ConfigureAwait(false);
-            }
-
+            await obsMgr.StopObserversAsync();
+            await Task.Delay(1000).ConfigureAwait(false);
             obs.Dispose();
-            ObserverManager.FabricClientInstance.Dispose();
+            obsMgr.Dispose();
         }
 
         /// <summary>
@@ -1380,6 +1357,11 @@ namespace FabricObserverTests
                 MemWarnUsageThresholdMb = 5, // This will definitely cause Warning alerts.
             };
 
+            var obsMgr = new ObserverManager(obs)
+            {
+                ApplicationName = "fabric:/TestApp0",
+            };
+
             await obs.ObserveAsync(this.token).ConfigureAwait(true);
 
             // observer ran to completion with no errors.
@@ -1391,32 +1373,10 @@ namespace FabricObserverTests
 
             // observer did not have any internal errors during run.
             Assert.IsFalse(obs.IsUnhealthy);
-
-            // If the node goes down, for example, or the app is gracefully closed,
-            // then clear all existing error or health reports suppled by this observer instance.
-            for (int i = 0; i < obs.HealthReportSourceIds.Count; i++)
-            {
-                var healthReport = new FabricObserver.Observers.Utilities.HealthReport
-                {
-                    AppName = !string.IsNullOrEmpty(obs.AppNames[i]) ? new Uri(obs.AppNames[i]) : null,
-                    Code = FOErrorWarningCodes.Ok,
-                    HealthMessage = $"Clearing existing Health Error/Warning, {obs.HealthReportProperties[i]}/{obs.HealthReportSourceIds[i]}, as FO is stopping.",
-                    Property = obs.HealthReportProperties[i],
-                    SourceId = obs.HealthReportSourceIds[i],
-                    State = HealthState.Ok,
-                    ReportType = HealthReportType.Application,
-                    NodeName = obs.NodeName,
-                };
-
-                var healthReporter = new ObserverHealthReporter(obs.ObserverLogger);
-                healthReporter.ReportHealthToServiceFabric(healthReport);
-
-                // This delay is required.
-                await Task.Delay(1000).ConfigureAwait(false);
-            }
-
+            await obsMgr.StopObserversAsync();
+            await Task.Delay(1000).ConfigureAwait(false);
             obs.Dispose();
-            ObserverManager.FabricClientInstance.Dispose();
+            obsMgr.Dispose();
         }
 
         /// <summary>

@@ -27,13 +27,13 @@ namespace FabricObserver.Observers
     {
         // Health Report data containers - For use in analysis to determine health state.
         // These lists are cleared after each healthy iteration.
-        private readonly List<FabricResourceUsageData<int>> allAppCpuData;
+        private readonly List<FabricResourceUsageData<double>> allAppCpuData;
         private readonly List<FabricResourceUsageData<float>> allAppMemDataMb;
         private readonly List<FabricResourceUsageData<double>> allAppMemDataPercent;
         private readonly List<FabricResourceUsageData<int>> allAppTotalActivePortsData;
         private readonly List<FabricResourceUsageData<int>> allAppEphemeralPortsData;
         private readonly Stopwatch stopwatch;
-        
+
         // userTargetList is the list of ApplicationInfo objects representing app/app types supplied in configuration.
         private List<ApplicationInfo> userTargetList;
 
@@ -46,7 +46,10 @@ namespace FabricObserver.Observers
             get; set;
         }
 
-        public string ConfigPackagePath { get; set; }
+        public string ConfigPackagePath
+        {
+            get; set;
+        }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="AppObserver"/> class.
@@ -54,7 +57,7 @@ namespace FabricObserver.Observers
         public AppObserver()
         {
             ConfigPackagePath = MachineInfoModel.ConfigSettings.ConfigPackagePath;
-            this.allAppCpuData = new List<FabricResourceUsageData<int>>();
+            this.allAppCpuData = new List<FabricResourceUsageData<double>>();
             this.allAppMemDataMb = new List<FabricResourceUsageData<float>>();
             this.allAppMemDataPercent = new List<FabricResourceUsageData<double>>();
             this.allAppTotalActivePortsData = new List<FabricResourceUsageData<int>>();
@@ -91,9 +94,9 @@ namespace FabricObserver.Observers
 
                 return;
             }
-            
+
             await MonitorDeployedAppsAsync(token).ConfigureAwait(false);
-            
+
             // The time it took to get to ReportAsync.
             // For use in computing actual HealthReport TTL.
             this.stopwatch.Stop();
@@ -109,7 +112,7 @@ namespace FabricObserver.Observers
             try
             {
                 token.ThrowIfCancellationRequested();
-                
+
                 if (this.deployedTargetList.Count == 0)
                 {
                     return Task.CompletedTask;
@@ -157,15 +160,7 @@ namespace FabricObserver.Observers
                                 continue;
                             }
                         }
-                        catch (ArgumentException)
-                        {
-                            continue;
-                        }
-                        catch (InvalidOperationException)
-                        {
-                            continue;
-                        }
-                        catch (Win32Exception)
+                        catch (Exception e) when (e is ArgumentException || e is InvalidOperationException || e is Win32Exception)
                         {
                             continue;
                         }
@@ -318,7 +313,7 @@ namespace FabricObserver.Observers
             {
                 this.userTargetList.AddRange(JsonHelper.ReadFromJsonStream<ApplicationInfo[]>(stream));
             }
-            
+
             // Are any of the config-supplied apps deployed?.
             if (this.userTargetList.Count == 0)
             {
@@ -404,7 +399,7 @@ namespace FabricObserver.Observers
                     // Add new resource data structures for each app service process.
                     if (this.allAppCpuData.All(list => list.Id != id))
                     {
-                        this.allAppCpuData.Add(new FabricResourceUsageData<int>(ErrorWarningProperty.TotalCpuTime, id, DataCapacity, UseCircularBuffer));
+                        this.allAppCpuData.Add(new FabricResourceUsageData<double>(ErrorWarningProperty.TotalCpuTime, id, DataCapacity, UseCircularBuffer));
                         this.allAppMemDataMb.Add(new FabricResourceUsageData<float>(ErrorWarningProperty.TotalMemoryConsumptionMb, id, DataCapacity, UseCircularBuffer));
                         this.allAppMemDataPercent.Add(new FabricResourceUsageData<double>(ErrorWarningProperty.TotalMemoryConsumptionPct, id, DataCapacity, UseCircularBuffer));
                         this.allAppTotalActivePortsData.Add(new FabricResourceUsageData<int>(ErrorWarningProperty.TotalActivePorts, id, 1));
@@ -419,7 +414,7 @@ namespace FabricObserver.Observers
                     }
 
                     // Warm up the counters.
-                    _ = cpuUsage.GetCpuUsageProcess(currentProcess);
+                    _ = cpuUsage.GetCpuUsagePercentageProcess(currentProcess);
                     _ = ProcessInfoProvider.Instance.GetProcessPrivateWorkingSetInMB(currentProcess.Id);
 
                     timer.Start();
@@ -429,7 +424,7 @@ namespace FabricObserver.Observers
                         token.ThrowIfCancellationRequested();
 
                         // CPU (all cores).
-                        int cpu = cpuUsage.GetCpuUsageProcess(currentProcess);
+                        double cpu = cpuUsage.GetCpuUsagePercentageProcess(currentProcess);
 
                         if (cpu >= 0)
                         {
@@ -495,7 +490,7 @@ namespace FabricObserver.Observers
                     }
                     else
                     {
-                        if (!(e is OperationCanceledException))
+                        if (!(e is OperationCanceledException || e is TaskCanceledException))
                         {
                             WriteToLogWithLevel(
                                 ObserverName,
@@ -710,7 +705,7 @@ namespace FabricObserver.Observers
                 appName,
                 ErrorWarningProperty.TotalMemoryConsumptionMb,
                 "Average",
-                Math.Round((double)this.allAppMemDataMb
+                Math.Round(this.allAppMemDataMb
                     .FirstOrDefault(x => x.Id == appName).AverageDataValue));
 
             CsvFileLogger.LogData(
